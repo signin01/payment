@@ -1,0 +1,52 @@
+﻿// Add this to your existing server.js before app.listen()
+
+// P2P Money Transfer
+app.post('/api/p2p/send', auth, (req, res) => {
+    const { amount, recipientEmail, note } = req.body;
+    const sender = users.find(u => u.id === req.userId);
+    const recipient = users.find(u => u.email === recipientEmail);
+    
+    if (!recipient) {
+        return res.status(404).json({ message: 'Recipient not found' });
+    }
+    
+    if (sender.balance < amount) {
+        return res.status(400).json({ message: 'Insufficient balance' });
+    }
+    
+    // Deduct from sender
+    sender.balance -= parseFloat(amount);
+    
+    // Add to recipient
+    recipient.balance += parseFloat(amount);
+    
+    // Record transaction for sender
+    const senderTx = {
+        id: Date.now(),
+        userId: sender.id,
+        amount: parseFloat(amount),
+        type: 'debit',
+        description: `Sent to ${recipientEmail}${note ? ' - ' + note : ''}`,
+        status: 'completed',
+        createdAt: new Date()
+    };
+    transactions.push(senderTx);
+    
+    // Record transaction for recipient
+    const recipientTx = {
+        id: Date.now() + 1,
+        userId: recipient.id,
+        amount: parseFloat(amount),
+        type: 'credit',
+        description: `Received from ${sender.email}${note ? ' - ' + note : ''}`,
+        status: 'completed',
+        createdAt: new Date()
+    };
+    transactions.push(recipientTx);
+    
+    res.json({ 
+        success: true, 
+        message: `₹${amount} sent to ${recipientEmail}`,
+        newBalance: sender.balance 
+    });
+});

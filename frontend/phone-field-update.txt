@@ -1,0 +1,39 @@
+﻿// Find the registration form and ADD this phone input field:
+
+{!isLogin && (
+  <form onSubmit={handleRegister}>
+    <input 
+      type="text" 
+      placeholder="Full Name" 
+      value={name} 
+      onChange={(e) => setName(e.target.value)} 
+      required 
+    />
+    <input 
+      type="email" 
+      placeholder="Email" 
+      value={email} 
+      onChange={(e) => setEmail(e.target.value)} 
+      required 
+    />
+    {/* ADD THIS PHONE FIELD */}
+    <input 
+      type="tel" 
+      placeholder="Phone Number (for notifications)" 
+      value={phone} 
+      onChange={(e) => setPhone(e.target.value)} 
+      required 
+    />
+    <input 
+      type="password" 
+      placeholder="Password (min 6)" 
+      value={password} 
+      onChange={(e) => setPassword(e.target.value)} 
+      required 
+    />
+    <button type="submit">Register</button>
+  </form>
+)}
+
+// Also add phone state at the top with other states:
+const [phone, setPhone] = useState('');

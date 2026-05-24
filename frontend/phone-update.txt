@@ -1,0 +1,12 @@
+﻿// Add phone field to registration form
+// Find the register form and add this input:
+
+<input 
+  type="tel" 
+  placeholder="Phone Number (for SMS alerts)" 
+  value={phone} 
+  onChange={(e) => setPhone(e.target.value)} 
+/>
+
+// Add phone state:
+const [phone, setPhone] = useState('');

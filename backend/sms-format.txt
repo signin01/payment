@@ -1,0 +1,9 @@
+﻿// Update the sendSMS function call messages with better formatting
+
+// Inside the /api/p2p/send route, replace the senderMessage and recipientMessage with:
+
+// For Sender
+const senderMessage = `💰 BHARATPAY TRANSACTION 💰\n\nYou SENT: ₹${sendAmount.toFixed(2)}\nTo: ${recipient.name}\nNote: ${note || 'No note'}\nTxn ID: ${transactionId}\nBalance: ₹${sender.balance.toFixed(2)}\n\nThank you for using BharatPay!`;
+
+// For Recipient
+const recipientMessage = `💰 BHARATPAY TRANSACTION 💰\n\nYou RECEIVED: ₹${sendAmount.toFixed(2)}\nFrom: ${sender.name} (${sender.email})\nSender Phone: ${sender.phone || 'Not provided'}\nNote: ${note || 'No note'}\nTxn ID: ${transactionId}\nBalance: ₹${recipient.balance.toFixed(2)}\n\nThank you for using BharatPay!`;

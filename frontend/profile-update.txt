@@ -1,0 +1,72 @@
+﻿// Add this code to your Profile tab section in App.js
+
+// First, add these states at the top with other states:
+const [editingProfile, setEditingProfile] = useState(false);
+const [updatePhone, setUpdatePhone] = useState('');
+
+// Add this function to handle profile update:
+const updateProfile = async () => {
+  setLoading(true);
+  try {
+    await axios.post(`${API_URL}/user/update`, { phone: updatePhone });
+    setUser({ ...user, phone: updatePhone });
+    toast.success('Phone number updated successfully!');
+    setEditingProfile(false);
+    fetchDashboard();
+  } catch (error) {
+    toast.error('Failed to update profile');
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Replace your Profile tab section with this:
+{activeTab === 'profile' && (
+  <div className="profile-section">
+    <div className="profile-card">
+      <div className="profile-avatar">👤</div>
+      <h2>{user?.name}</h2>
+      <p className="profile-email">{user?.email}</p>
+      
+      {editingProfile ? (
+        <div className="profile-edit">
+          <input 
+            type="tel" 
+            placeholder="Enter phone number" 
+            value={updatePhone} 
+            onChange={(e) => setUpdatePhone(e.target.value)} 
+          />
+          <div className="edit-buttons">
+            <button onClick={updateProfile} disabled={loading}>Save</button>
+            <button onClick={() => setEditingProfile(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div className="profile-phone">
+          <p>📱 {user?.phone || 'No phone number added'}</p>
+          <button className="edit-btn" onClick={() => {
+            setUpdatePhone(user?.phone || '');
+            setEditingProfile(true);
+          }}>✏️ Add/Edit Phone</button>
+        </div>
+      )}
+      
+      <div className="profile-stats">
+        <div className="profile-stat"><span>💰 Balance</span><strong>₹{balance.toFixed(2)}</strong></div>
+        <div className="profile-stat"><span>📊 Transactions</span><strong>{transactions.length}</strong></div>
+        <div className="profile-stat"><span>📈 Credit Score</span><strong>{creditScore?.score || 'N/A'}</strong></div>
+      </div>
+    </div>
+
+    <div className="leaderboard-card">
+      <h3>🏆 Top Spenders</h3>
+      {leaderboard.map((u, i) => (
+        <div key={i} className="leaderboard-item">
+          <span className="rank">#{u.rank}</span>
+          <span className="name">{u.name}</span>
+          <span className="amount">₹{u.spent?.toFixed(2)}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+)}

@@ -1,0 +1,375 @@
+﻿const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Razorpay = require('razorpay');
+require('dotenv').config();
+const fs = require('fs');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// File-based storage
+const DATA_FILE = 'database.json';
+let users = [];
+let transactions = [];
+let paymentOrders = [];
+let notifications = [];
+
+// Load existing data
+try {
+    if (fs.existsSync(DATA_FILE)) {
+        const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        users = data.users || [];
+        transactions = data.transactions || [];
+        notifications = data.notifications || [];
+        console.log(`✅ Loaded ${users.length} users`);
+    }
+} catch (error) {
+    console.log('Starting fresh database');
+}
+
+function saveData() {
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ users, transactions, notifications }, null, 2));
+}
+
+// Initialize Razorpay
+const razorpay = new Razorpay({
+    key_id: 'rzp_test_SsuX8Ox4XICxUr',
+    key_secret: 'wpKHteId4ES6qmOSDxLyPp7q'
+});
+
+// Auth middleware
+const auth = (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ message: 'Unauthorized' });
+    try {
+        const decoded = jwt.verify(token, 'secret123');
+        req.userId = decoded.id;
+        next();
+    } catch (error) {
+        res.status(401).json({ message: 'Invalid token' });
+    }
+};
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { name, email, password, phone } = req.body;
+        if (users.find(u => u.email === email)) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+        
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = {
+            id: users.length + 1,
+            name: name,
+            email: email,
+            phone: phone || '',
+            password: hashedPassword,
+            balance: 100000,
+            totalSpent: 0,
+            createdAt: new Date()
+        };
+        users.push(user);
+        
+        transactions.push({
+            id: Date.now(),
+            userId: user.id,
+            amount: 100000,
+            type: 'credit',
+            description: 'Welcome Bonus - ₹1,00,000 credited',
+            status: 'completed',
+            createdAt: new Date()
+        });
+        
+        saveData();
+        
+        const token = jwt.sign({ id: user.id }, 'secret123');
+        res.json({ success: true, token, user: { id: user.id, name, email, balance: user.balance, phone: user.phone } });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = users.find(u => u.email === email);
+        if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
+        const token = jwt.sign({ id: user.id }, 'secret123');
+        res.json({ success: true, token, user: { id: user.id, name: user.name, email, balance: user.balance, phone: user.phone } });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// Dashboard
+app.get('/api/dashboard/stats', auth, (req, res) => {
+    const user = users.find(u => u.id === req.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    
+    const userTransactions = transactions.filter(t => t.userId === req.userId);
+    res.json({
+        success: true,
+        stats: {
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            balance: user.balance,
+            totalTransactions: userTransactions.length,
+            totalAmount: userTransactions.reduce((sum, t) => sum + t.amount, 0),
+            recentTransactions: userTransactions.slice(-5).reverse()
+        }
+    });
+});
+
+// Create Razorpay Order
+app.post('/api/create-order', auth, async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const options = {
+            amount: amount * 100,
+            currency: 'INR',
+            receipt: `receipt_${Date.now()}`,
+            payment_capture: 1
+        };
+        const order = await razorpay.orders.create(options);
+        paymentOrders.push({ orderId: order.id, userId: req.userId, amount: amount });
+        res.json({ success: true, orderId: order.id, amount: amount, keyId: 'rzp_test_SsuX8Ox4XICxUr' });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to create order' });
+    }
+});
+
+// Verify Payment
+app.post('/api/verify-payment', auth, async (req, res) => {
+    try {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const crypto = require('crypto');
+        const body = razorpay_order_id + '|' + razorpay_payment_id;
+        const expectedSignature = crypto.createHmac('sha256', 'wpKHteId4ES6qmOSDxLyPp7q').update(body).digest('hex');
+        
+        if (expectedSignature === razorpay_signature) {
+            const order = paymentOrders.find(o => o.orderId === razorpay_order_id);
+            if (order) {
+                const user = users.find(u => u.id === order.userId);
+                user.balance += order.amount;
+                transactions.push({
+                    id: Date.now(),
+                    userId: user.id,
+                    amount: order.amount,
+                    type: 'credit',
+                    description: `Added via Razorpay`,
+                    status: 'completed',
+                    createdAt: new Date()
+                });
+                saveData();
+            }
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ message: 'Invalid signature' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// SEND MONEY - NOTIFICATIONS FOR BOTH SENDER AND RECIPIENT
+app.post('/api/p2p/send', auth, async (req, res) => {
+    const { amount, recipientEmail, note } = req.body;
+    const sender = users.find(u => u.id === req.userId);
+    const recipient = users.find(u => u.email === recipientEmail);
+    
+    if (!recipient) {
+        return res.status(404).json({ message: 'Recipient not found' });
+    }
+    
+    if (sender.balance < amount) {
+        return res.status(400).json({ message: 'Insufficient balance' });
+    }
+    
+    const sendAmount = parseFloat(amount);
+    const transactionId = `TXN${Date.now()}`;
+    
+    // Process transfer
+    sender.balance -= sendAmount;
+    recipient.balance += sendAmount;
+    
+    // Record transactions
+    transactions.push({
+        id: transactionId,
+        userId: sender.id,
+        amount: sendAmount,
+        type: 'debit',
+        description: `Sent to ${recipient.email}${note ? ' - ' + note : ''}`,
+        status: 'completed',
+        createdAt: new Date()
+    });
+    
+    transactions.push({
+        id: transactionId + '_rec',
+        userId: recipient.id,
+        amount: sendAmount,
+        type: 'credit',
+        description: `Received from ${sender.email}${note ? ' - ' + note : ''}`,
+        status: 'completed',
+        createdAt: new Date()
+    });
+    
+    saveData();
+    
+    // ============ NOTIFICATION FOR SENDER (YOU) ============
+    console.log('\n' + '='.repeat(60));
+    console.log('📧 EMAIL NOTIFICATION - TO SENDER (YOU)');
+    console.log('='.repeat(60));
+    console.log(`TO: ${sender.email}`);
+    console.log(`SUBJECT: ✅ Money Sent Successfully!`);
+    console.log(`
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  ✅ MONEY SENT SUCCESSFULLY!                                 ║
+    ╠══════════════════════════════════════════════════════════════╣
+    ║  Dear ${sender.name},                                         ║
+    ║                                                              ║
+    ║  You have successfully sent money!                           ║
+    ║                                                              ║
+    ║  ┌────────────────────────────────────────────────────────┐ ║
+    ║  │              -₹${sendAmount}                                      │ ║
+    ║  └────────────────────────────────────────────────────────┘ ║
+    ║                                                              ║
+    ║  📋 Transaction Details:                                     ║
+    ║  ├─ Transaction ID: ${transactionId}                         ║
+    ║  └─ Date: ${new Date().toLocaleString()}                     ║
+    ║                                                              ║
+    ║  👤 Recipient Information:                                   ║
+    ║  ├─ Name: ${recipient.name}                                  ║
+    ║  ├─ Email: ${recipient.email}                                ║
+    ║  └─ Phone: ${recipient.phone || 'Not provided'}              ║
+    ║                                                              ║
+    ║  ${note ? `📝 Your Note: "${note}"` : ''}
+    ║                                                              ║
+    ║  💰 Your Balance Update:                                     ║
+    ║  ├─ Previous Balance: ₹${(sender.balance + sendAmount).toFixed(2)}   ║
+    ║  ├─ Amount Sent: -₹${sendAmount.toFixed(2)}                           ║
+    ║  └─ New Balance: ₹${sender.balance.toFixed(2)}                         ║
+    ║                                                              ║
+    ║  Thank you for using BharatPay! 🚀                           ║
+    ╚══════════════════════════════════════════════════════════════╝
+    `);
+    
+    // ============ NOTIFICATION FOR RECIPIENT ============
+    console.log('\n' + '='.repeat(60));
+    console.log('📧 EMAIL NOTIFICATION - TO RECIPIENT');
+    console.log('='.repeat(60));
+    console.log(`TO: ${recipient.email}`);
+    console.log(`SUBJECT: 💰 You received ₹${sendAmount} from ${sender.name}!`);
+    console.log(`
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  💰 MONEY RECEIVED! 💰                                       ║
+    ╠══════════════════════════════════════════════════════════════╣
+    ║  Dear ${recipient.name},                                      ║
+    ║                                                              ║
+    ║  You have received money in your wallet!                     ║
+    ║                                                              ║
+    ║  ┌────────────────────────────────────────────────────────┐ ║
+    ║  │              +₹${sendAmount}                                      │ ║
+    ║  └────────────────────────────────────────────────────────┘ ║
+    ║                                                              ║
+    ║  📋 Transaction Details:                                     ║
+    ║  ├─ Transaction ID: ${transactionId}                         ║
+    ║  └─ Date: ${new Date().toLocaleString()}                     ║
+    ║                                                              ║
+    ║  👤 Sender Information:                                      ║
+    ║  ├─ Name: ${sender.name}                                     ║
+    ║  ├─ Email: ${sender.email}                                   ║
+    ║  └─ Phone: ${sender.phone || 'Not provided'}                 ║
+    ║                                                              ║
+    ║  ${note ? `📝 Note from Sender: "${note}"` : ''}
+    ║                                                              ║
+    ║  💰 Your Balance Update:                                     ║
+    ║  ├─ Previous Balance: ₹${(recipient.balance - sendAmount).toFixed(2)}   ║
+    ║  ├─ Amount Received: +₹${sendAmount.toFixed(2)}                        ║
+    ║  └─ New Balance: ₹${recipient.balance.toFixed(2)}                        ║
+    ║                                                              ║
+    ║  Thank you for using BharatPay! 🚀                           ║
+    ╚══════════════════════════════════════════════════════════════╝
+    `);
+    
+    // ============ SMS NOTIFICATIONS FOR BOTH ============
+    console.log('\n' + '='.repeat(60));
+    console.log('📱 SMS NOTIFICATION - TO SENDER (YOU)');
+    console.log('='.repeat(60));
+    console.log(`TO: ${sender.phone || 'No phone registered'}`);
+    console.log(`MESSAGE: BharatPay: You sent ₹${sendAmount} to ${recipient.name} (${recipient.email}). TXN: ${transactionId}. Your new balance: ₹${sender.balance}`);
+    
+    console.log('\n' + '='.repeat(60));
+    console.log('📱 SMS NOTIFICATION - TO RECIPIENT');
+    console.log('='.repeat(60));
+    console.log(`TO: ${recipient.phone || 'No phone registered'}`);
+    console.log(`MESSAGE: BharatPay: You received ₹${sendAmount} from ${sender.name} (${sender.email}). Phone: ${sender.phone || 'No phone'}. TXN: ${transactionId}. New balance: ₹${recipient.balance}`);
+    console.log('='.repeat(60) + '\n');
+    
+    res.json({ 
+        success: true, 
+        newBalance: sender.balance,
+        message: `₹${sendAmount} sent to ${recipientEmail}`,
+        transactionId: transactionId
+    });
+});
+
+// Get Transactions
+app.get('/api/payments/transactions', auth, (req, res) => {
+    const userTransactions = transactions.filter(t => t.userId === req.userId);
+    res.json({ success: true, transactions: userTransactions.reverse() });
+});
+
+// Get Payment Methods
+app.get('/api/payment-methods', (req, res) => {
+    res.json({
+        success: true,
+        methods: [
+            { id: 'razorpay', name: 'Credit/Debit Card', icon: '💳' },
+            { id: 'razorpay', name: 'UPI', icon: '📱' },
+            { id: 'razorpay', name: 'NetBanking', icon: '🏦' }
+        ]
+    });
+});
+
+// Update profile
+app.post('/api/user/update', auth, (req, res) => {
+    const { phone } = req.body;
+    const user = users.find(u => u.id === req.userId);
+    if (user) {
+        user.phone = phone;
+        saveData();
+        res.json({ success: true, message: 'Profile updated' });
+    } else {
+        res.status(404).json({ message: 'User not found' });
+    }
+});
+
+// Leaderboard
+app.get('/api/leaderboard', (req, res) => {
+    const leaderboard = users.map(u => ({ name: u.name, spent: u.totalSpent || 0 })).sort((a, b) => b.spent - a.spent).slice(0, 10).map((u, i) => ({ rank: i + 1, ...u }));
+    res.json({ success: true, leaderboard });
+});
+
+// Credit Score
+app.get('/api/credit-score', auth, (req, res) => {
+    const user = users.find(u => u.id === req.userId);
+    let score = 750;
+    if (user.totalSpent > 50000) score += 50;
+    let rating = score >= 800 ? 'Excellent' : score >= 700 ? 'Good' : 'Fair';
+    res.json({ success: true, score, rating });
+});
+
+const PORT = 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 BharatPay Server on port ${PORT}`);
+    console.log(`💰 Default balance: ₹1,00,000`);
+    console.log(`📱 BOTH Sender AND Receiver will get notifications!`);
+});
