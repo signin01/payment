@@ -3,8 +3,7 @@ import './App.css';
 import axios from 'axios';
 import toast, { Toaster } from 'react-hot-toast';
 
-const API_URL = 'http://localhost:5000/api';
-
+const API_URL = 'https://bharatpay-backend.onrender.com/api';
 function App() {
   const [isLogin, setIsLogin] = useState(true);
   const [user, setUser] = useState(null);
